@@ -4,6 +4,11 @@ import type { ComponentType } from 'react';
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  ChevronDown,
+  ChevronUp,
+  SlidersHorizontal,
+  RotateCcw,
+  X,
   ChevronLeft,
   ChevronRight,
   Database,
@@ -19,10 +24,12 @@ import { Input } from '@/components/ui/input';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { STORE_COVERAGE_START, validateLottoMapData } from '@/lib/lotto-data.mjs';
-import type { LottoDraw, LottoMapData, RankFilter, VisibleStore } from './lotto-types';
+import { REGION_NAMES, matchesArea, matchesSearch, searchText, storeArea } from '@/lib/lotto-search.mjs';
+import type { MapFocus, LottoDraw, LottoMapData, RankFilter, VisibleStore } from './lotto-types';
 
 type MapComponent = ComponentType<{
   stores: VisibleStore[];
+  focus: MapFocus;
   draws: Record<number, LottoDraw>;
   selectedStoreId: string | null;
   onSelectStore: (id: string | null) => void;
@@ -48,6 +55,8 @@ type ToolState = {
   rankFilter: RankFilter;
   query: string;
   deferredQuery: string;
+  region: string;
+  district: string;
   isFullData: boolean;
 };
 
@@ -65,7 +74,7 @@ function ballTone(number: number) {
   return 'green';
 }
 
-function countFilteredStores(data: LottoMapData, selectedRound: string, rankFilter: RankFilter, query: string) {
+function countFilteredStores(data: LottoMapData, selectedRound: string, rankFilter: RankFilter, query: string, region = 'all', district = 'all') {
   const normalizedQuery = query.trim().toLocaleLowerCase('ko-KR');
   let stores = 0;
   let tickets = 0;
@@ -119,14 +128,19 @@ export function LottoExplorer() {
   const [selectedRound, setSelectedRound] = useState('all');
   const [rankFilter, setRankFilter] = useState<RankFilter>('all');
   const [query, setQuery] = useState('');
+  const [region, setRegion] = useState('all');
+  const [district, setDistrict] = useState('all');
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [resultsOpen, setResultsOpen] = useState(false);
+  const [focusRevision, setFocusRevision] = useState(0);
   const deferredQuery = useDeferredValue(query);
   const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null);
   const isFullData = dataStatus === 'ready';
-  const toolState = useRef<ToolState>({ data, selectedRound, rankFilter, query, deferredQuery, isFullData });
+  const toolState = useRef<ToolState>({ data, selectedRound, rankFilter, query, deferredQuery, region, district, isFullData });
 
   useEffect(() => {
-    toolState.current = { data, selectedRound, rankFilter, query, deferredQuery, isFullData };
-  }, [data, deferredQuery, isFullData, query, rankFilter, selectedRound]);
+    toolState.current = { data, selectedRound, rankFilter, query, deferredQuery, region, district, isFullData };
+  }, [data, deferredQuery, district, isFullData, query, rankFilter, region, selectedRound]);
 
   useEffect(() => {
     let active = true;
@@ -206,7 +220,8 @@ export function LottoExplorer() {
             draw: nextRound,
             rank: nextRank,
             query: nextQuery,
-            ...countFilteredStores(current.data, nextRound, nextRank, nextQuery),
+            region: current.region, district: current.district,
+            ...countFilteredStores(current.data, nextRound, nextRank, nextQuery, current.region, current.district),
           };
         },
       }, { signal: lifecycle.signal });
@@ -227,7 +242,8 @@ export function LottoExplorer() {
             rank: current.rankFilter,
             query: current.query,
             fullDatasetLoaded: current.isFullData,
-            ...countFilteredStores(current.data, current.selectedRound, current.rankFilter, current.query),
+            region: current.region, district: current.district,
+            ...countFilteredStores(current.data, current.selectedRound, current.rankFilter, current.query, current.region, current.district),
           };
         },
       }, { signal: lifecycle.signal });
@@ -245,7 +261,7 @@ export function LottoExplorer() {
   const storeSearchIndex = useMemo(() => new Map(
     data.stores.map((store) => [
       store.id,
-      `${store.name} ${store.address} ${store.region}`.toLocaleLowerCase('ko-KR'),
+      searchText(store),
     ]),
   ), [data.stores]);
 
@@ -253,7 +269,7 @@ export function LottoExplorer() {
   const visibleStores = useMemo<VisibleStore[]>(() => {
     const result: VisibleStore[] = [];
     for (const store of data.stores) {
-      if (normalizedQuery && !storeSearchIndex.get(store.id)?.includes(normalizedQuery)) continue;
+      if (!matchesArea(store, region, district) || !matchesSearch(storeSearchIndex.get(store.id) || '', normalizedQuery)) continue;
       const visibleWins = store.wins.filter((win) => (
         (selectedRound === 'all' || win.draw === Number(selectedRound))
         && (rankFilter === 'all' || win.rank === Number(rankFilter))
@@ -261,7 +277,24 @@ export function LottoExplorer() {
       if (visibleWins.length) result.push({ ...store, visibleWins });
     }
     return result;
-  }, [data.stores, normalizedQuery, rankFilter, selectedRound, storeSearchIndex]);
+  }, [data.stores, district, normalizedQuery, rankFilter, region, selectedRound, storeSearchIndex]);
+
+  const districts = useMemo(() => [...new Set(data.stores
+    .filter((store) => storeArea(store).region === region)
+    .map((store) => storeArea(store).district).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko-KR')), [data.stores, region]);
+
+  // Area-only bounds still let users navigate when a round has no winners there.
+  const focus = useMemo<MapFocus>(() => ({
+    key: JSON.stringify([region, district, normalizedQuery, selectedRound, rankFilter, focusRevision]),
+    points: (visibleStores.length ? visibleStores : data.stores.filter((store) =>
+      matchesArea(store, region, district) && matchesSearch(storeSearchIndex.get(store.id) || '', normalizedQuery)
+    )).map((store) => [store.lat, store.lng]),
+  }), [data.stores, district, focusRevision, normalizedQuery, rankFilter, region, selectedRound, storeSearchIndex, visibleStores]);
+
+  const resetFilters = () => {
+    setRegion('all'); setDistrict('all'); setQuery(''); setSelectedRound('all'); setRankFilter('all');
+    setSelectedStoreId(null); setFocusRevision((value) => value + 1);
+  };
 
   const listedStores = useMemo(() => [...visibleStores].sort((a, b) => (
       b.visibleWins.reduce((sum, win) => sum + win.tickets, 0)
@@ -285,6 +318,7 @@ export function LottoExplorer() {
     const current = selectedRound === 'all' ? data.latestDraw : Number(selectedRound);
     const next = Math.max(data.coverageStart, Math.min(data.latestDraw, current + delta));
     setSelectedRound(String(next));
+    setSelectedStoreId(null);
   };
 
   return (
@@ -308,8 +342,9 @@ export function LottoExplorer() {
         </a>
       </header>
 
-      <div className="workspace">
-        <aside className="control-panel">
+      <div className={`workspace ${effectiveSelectedStoreId ? 'has-selection' : ''}`}>
+        <aside className="control-panel" aria-label="판매점 탐색">
+          <div className={`top-panel ${filtersOpen ? 'filters-open' : ''}`}>
           <div className="panel-intro">
             <p className="eyebrow"><MapPinned aria-hidden="true" /> LOTTO 6/45 MAP</p>
             <h1>당첨판매점을<br />지도에서 한눈에</h1>
@@ -325,6 +360,63 @@ export function LottoExplorer() {
             </div>
           )}
 
+          <section className="filter-section" aria-label="지도 필터">
+            <form className="search-toolbar" onSubmit={(event) => { event.preventDefault(); setSelectedStoreId(null); setFocusRevision((value) => value + 1); setFiltersOpen(false); }}>
+              <label className="search-box" htmlFor="store-search">
+                <Search aria-hidden="true" />
+                <Input id="store-search" aria-label="지역, 판매점명 또는 주소 검색" value={query} maxLength={80} onChange={(event) => { setQuery(event.target.value); setSelectedStoreId(null); }} placeholder="지역·판매점·주소 검색" />
+                {query && <button type="button" className="search-clear" aria-label="검색어 지우기" onClick={() => { setQuery(''); setSelectedStoreId(null); }}><X /></button>}
+              </label>
+              <button className="search-submit" type="submit" aria-label="검색 결과로 지도 이동"><Search /></button>
+              <button className="mobile-filter-toggle" type="button" aria-expanded={filtersOpen} aria-controls="advanced-filters" onClick={() => setFiltersOpen((open) => !open)}><SlidersHorizontal /><span>필터</span>{(rankFilter !== 'all' || selectedRound !== 'all') && <i />}</button>
+            </form>
+            <div className="region-controls">
+              <NativeSelect className="region-select" aria-label="시·도 선택" value={region} disabled={!isFullData} onChange={(event) => { setRegion(event.target.value); setDistrict('all'); setSelectedStoreId(null); }}>
+                <NativeSelectOption value="all">전국 · 시/도</NativeSelectOption>
+                {Object.entries(REGION_NAMES).map(([code, name]) => <NativeSelectOption key={code} value={code}>{name}</NativeSelectOption>)}
+              </NativeSelect>
+              <NativeSelect className="region-select" aria-label="시·군·구 선택" value={district} disabled={region === 'all' || !districts.length} onChange={(event) => { setDistrict(event.target.value); setSelectedStoreId(null); }}>
+                <NativeSelectOption value="all">{region === '세종' ? '세종 전체' : '전체 시/군/구'}</NativeSelectOption>
+                {districts.map((name) => <NativeSelectOption key={name} value={name}>{name}</NativeSelectOption>)}
+              </NativeSelect>
+              <button className="reset-filters" type="button" aria-label="전체 필터 초기화" title="전체 필터 초기화" onClick={resetFilters}><RotateCcw /></button>
+            </div>
+            <div className="advanced-filters" id="advanced-filters">
+            <div className="filter-label-row"><label htmlFor="round-select">회차</label><span>{isFullData ? `${data.draws.length.toLocaleString('ko-KR')}개 회차` : '데이터 확인 중'}</span></div>
+            <div className="round-control">
+              <Button variant="outline" size="icon-lg" aria-label="이전 회차" onClick={() => nudgeRound(-1)} disabled={!isFullData || (selectedRound !== 'all' && Number(selectedRound) <= data.coverageStart)}>
+                <ChevronLeft />
+              </Button>
+              <NativeSelect id="round-select" className="round-select" disabled={!isFullData} value={selectedRound} onChange={(event) => { setSelectedRound(event.target.value); setSelectedStoreId(null); }}>
+                <NativeSelectOption value="all">{isFullData ? `전체 회차 (${data.coverageStart}–${data.latestDraw}회)` : '전체 회차'}</NativeSelectOption>
+                {sortedDraws.map((draw) => <NativeSelectOption key={draw.draw} value={String(draw.draw)}>{draw.draw}회 · {draw.date.slice(0, 4)}</NativeSelectOption>)}
+              </NativeSelect>
+              <Button variant="outline" size="icon-lg" aria-label="다음 회차" onClick={() => nudgeRound(1)} disabled={!isFullData || selectedRound === 'all' || Number(selectedRound) >= data.latestDraw}>
+                <ChevronRight />
+              </Button>
+            </div>
+
+            {isFullData && <p className="coverage-note">{selectedRound === 'all' ? `${data.coverageStart}–${data.latestDraw}회 누적 판매점을 표시 중입니다.` : `${selectedRound}회 판매점을 표시 중입니다.`}</p>}
+
+            <div className="filter-label-row"><span id="rank-label">당첨 등수</span></div>
+            <Tabs value={rankFilter} onValueChange={(value) => { setRankFilter(value as RankFilter); setSelectedStoreId(null); }} aria-labelledby="rank-label">
+              <TabsList className="rank-tabs">
+                <TabsTrigger value="all">전체</TabsTrigger>
+                <TabsTrigger value="1"><i className="rank-dot rank-dot-first" />1등</TabsTrigger>
+                <TabsTrigger value="2"><i className="rank-dot rank-dot-second" />2등</TabsTrigger>
+              </TabsList>
+            </Tabs>
+
+            </div>
+          </section>
+          </div>
+          <div className={`bottom-panel ${resultsOpen ? 'is-expanded' : ''}`}>
+            <button className="mobile-results-toggle" aria-expanded={resultsOpen} aria-controls="results-content" onClick={() => setResultsOpen((open) => !open)}>
+              <span className="sheet-handle" aria-hidden="true" />
+              <span><Layers3 aria-hidden="true" />판매점 <strong>{visibleStores.length.toLocaleString('ko-KR')}곳</strong><small> · {totalWins.toLocaleString('ko-KR')}건 당첨</small></span>
+              <span>{resultsOpen ? '접기' : '목록·회차'}{resultsOpen ? <ChevronDown /> : <ChevronUp />}</span>
+            </button>
+            <div id="results-content" className="results-content">
           {activeDraw && (
             <section className="draw-card" aria-label={`${activeDraw.draw}회 당첨 정보`}>
               <div className="draw-card-heading">
@@ -348,38 +440,6 @@ export function LottoExplorer() {
             </section>
           )}
 
-          <section className="filter-section" aria-label="지도 필터">
-            <div className="filter-label-row"><label htmlFor="round-select">회차</label><span>{isFullData ? `${data.draws.length.toLocaleString('ko-KR')}개 회차` : '데이터 확인 중'}</span></div>
-            <div className="round-control">
-              <Button variant="outline" size="icon-lg" aria-label="이전 회차" onClick={() => nudgeRound(-1)} disabled={!isFullData || (selectedRound !== 'all' && Number(selectedRound) <= data.coverageStart)}>
-                <ChevronLeft />
-              </Button>
-              <NativeSelect id="round-select" className="round-select" disabled={!isFullData} value={selectedRound} onChange={(event) => setSelectedRound(event.target.value)}>
-                <NativeSelectOption value="all">{isFullData ? `전체 회차 (${data.coverageStart}–${data.latestDraw}회)` : '전체 회차'}</NativeSelectOption>
-                {sortedDraws.map((draw) => <NativeSelectOption key={draw.draw} value={String(draw.draw)}>{draw.draw}회 · {draw.date.slice(0, 4)}</NativeSelectOption>)}
-              </NativeSelect>
-              <Button variant="outline" size="icon-lg" aria-label="다음 회차" onClick={() => nudgeRound(1)} disabled={!isFullData || selectedRound === 'all' || Number(selectedRound) >= data.latestDraw}>
-                <ChevronRight />
-              </Button>
-            </div>
-
-            {isFullData && <p className="coverage-note">{selectedRound === 'all' ? `${data.coverageStart}–${data.latestDraw}회 누적 판매점을 표시 중입니다.` : `${selectedRound}회 판매점을 표시 중입니다.`}</p>}
-
-            <div className="filter-label-row"><span id="rank-label">당첨 등수</span></div>
-            <Tabs value={rankFilter} onValueChange={(value) => setRankFilter(value as RankFilter)} aria-labelledby="rank-label">
-              <TabsList className="rank-tabs">
-                <TabsTrigger value="all">전체</TabsTrigger>
-                <TabsTrigger value="1"><i className="rank-dot rank-dot-first" />1등</TabsTrigger>
-                <TabsTrigger value="2"><i className="rank-dot rank-dot-second" />2등</TabsTrigger>
-              </TabsList>
-            </Tabs>
-
-            <label className="search-box" htmlFor="store-search">
-              <Search aria-hidden="true" />
-              <Input id="store-search" aria-label="판매점명 또는 주소 검색" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="판매점·주소 검색" />
-            </label>
-          </section>
-
           <section className="results-section">
             <div className="results-heading">
               <div><Layers3 aria-hidden="true" /><span>지도 표시</span></div>
@@ -390,7 +450,7 @@ export function LottoExplorer() {
                 const hasFirst = store.visibleWins.some((win) => win.rank === 1);
                 const hasSecond = store.visibleWins.some((win) => win.rank === 2);
                 return (
-                  <button className={`store-item ${effectiveSelectedStoreId === store.id ? 'is-selected' : ''}`} aria-pressed={effectiveSelectedStoreId === store.id} key={store.id} onClick={() => setSelectedStoreId(store.id)}>
+                  <button className={`store-item ${effectiveSelectedStoreId === store.id ? 'is-selected' : ''}`} aria-pressed={effectiveSelectedStoreId === store.id} key={store.id} onClick={() => { setSelectedStoreId(store.id); setResultsOpen(false); setFiltersOpen(false); }}>
                     <span className={`store-rank-badge ${hasFirst && hasSecond ? 'rank-both' : hasFirst ? 'rank-first' : 'rank-second'}`}>
                       {hasFirst && hasSecond ? '1+2' : hasFirst ? '1' : '2'}
                     </span>
@@ -399,7 +459,7 @@ export function LottoExplorer() {
                   </button>
                 );
               })}
-              {visibleStores.length === 0 && <div className="empty-result">{isFullData ? '조건에 맞는 판매점이 없습니다.' : dataStatus === 'loading' ? '판매점 기록을 불러오는 중입니다.' : '데이터를 다시 불러와 주세요.'}</div>}
+              {visibleStores.length === 0 && <div className="empty-result">{isFullData ? '조건에 맞는 판매점이 없습니다. 지역이나 검색 조건을 변경해 주세요.' : dataStatus === 'loading' ? '판매점 기록을 불러오는 중입니다.' : '데이터를 다시 불러와 주세요.'}</div>}
               {visibleStores.length > 80 && <p className="list-limit">지도에는 전체를 표시하며 목록은 상위 80곳만 보여줍니다.</p>}
             </div>
           </section>
@@ -408,6 +468,8 @@ export function LottoExplorer() {
             <Database aria-hidden="true" />
             <p><strong>{data.source}</strong><span>판매점 기록은 공식 조회가 제공되는 {STORE_COVERAGE_START}회부터입니다. 인터넷 판매점과 좌표가 없는 기록은 지도에서 제외됩니다. 위치는 가장 최근 공개 주소 기준입니다.</span></p>
           </footer>
+            </div>
+          </div>
         </aside>
 
         <section className="map-stage" aria-label="로또 당첨판매점 지도">
@@ -421,7 +483,7 @@ export function LottoExplorer() {
             <span><i className="legend-pin legend-both" />중복</span>
           </div>
           {MapView ? (
-            <MapView stores={visibleStores} draws={draws} selectedStoreId={effectiveSelectedStoreId} onSelectStore={setSelectedStoreId} />
+            <MapView focus={focus} stores={visibleStores} draws={draws} selectedStoreId={effectiveSelectedStoreId} onSelectStore={setSelectedStoreId} />
           ) : mapError ? (
             <div className="map-loading map-error" role="alert">
               <AlertTriangle aria-hidden="true" />
