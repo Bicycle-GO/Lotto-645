@@ -1,5 +1,10 @@
 export type RankFilter = 'all' | '1' | '2';
 
+export interface MapFocus {
+  key: string;
+  points: [number, number][];
+}
+
 export interface LottoDraw {
   draw: number;
   date: string;
