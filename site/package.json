@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "vinext dev",
     "build": "pnpm data:validate && vinext build && node scripts/validate-lotto-data.mjs --built",
+    "build:vercel": "node scripts/build-vercel.mjs",
     "data:build": "node scripts/build-lotto-data.mjs",
     "data:validate": "node scripts/validate-lotto-data.mjs",
     "test": "node --test scripts/*.test.mjs",

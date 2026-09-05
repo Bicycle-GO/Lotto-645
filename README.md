@@ -31,6 +31,19 @@ pnpm build
 
 `pnpm build`는 전체 회차 데이터 검증을 먼저 실행하고, 빌드 후에도 `/data/lotto-map-data.json`에 해당하는 배포 파일이 원본과 동일한지 확인합니다. 회차가 빠졌거나 최근 회차 샘플만 들어 있거나 데이터 파일이 배포에서 누락되면 빌드를 중단합니다. 브라우저에서도 같은 데이터 검증을 적용하며, 로딩 실패 시 오류와 재시도 버튼을 표시합니다.
 
+## Vercel 배포
+
+GitHub 저장소를 연결하면 `vercel.json`이 설치·빌드 명령과 출력 폴더를 지정합니다. Vercel 프로젝트의 Root Directory가 저장소 루트이거나 `site`인 경우 모두 지원합니다. Node.js는 22.13 이상을 사용해야 합니다.
+
+Vercel에서는 `pnpm build:vercel`로 첫 화면을 정적 HTML로 생성하고 `dist/client`를 배포합니다. 빌드는 전체 회차 JSON뿐 아니라 `index.html`과 연결된 JavaScript·CSS 파일의 존재도 검사합니다. Cloudflare용 서버 결과만 배포하여 첫 화면에 404가 발생하는 것을 방지합니다.
+
+```powershell
+cd site
+pnpm build:vercel
+```
+
+Sites 배포는 기존 `pnpm build`와 Cloudflare 설정을 사용합니다.
+
 요청 간격을 늘려 재개하려면 PowerShell에서 다음과 같이 실행할 수 있습니다. 기존 체크포인트를 삭제할 필요가 없습니다.
 
 ```powershell
