@@ -18,7 +18,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { sampleData } from './sample-data';
+import { STORE_COVERAGE_START, validateLottoMapData } from '@/lib/lotto-data.mjs';
 import type { LottoDraw, LottoMapData, RankFilter, VisibleStore } from './lotto-types';
 
 type MapComponent = ComponentType<{
@@ -108,8 +108,12 @@ function parseMapToolInput(input: unknown, data: LottoMapData) {
 }
 
 export function LottoExplorer() {
-  const [data, setData] = useState<LottoMapData>(sampleData);
-  const [dataStatus, setDataStatus] = useState<'loading' | 'ready' | 'preview'>('loading');
+  const [data, setData] = useState<LottoMapData>({
+    generatedAt: '', coverageStart: STORE_COVERAGE_START, latestDraw: STORE_COVERAGE_START,
+    source: '동행복권 공개 데이터', draws: [], stores: [],
+  });
+  const [dataStatus, setDataStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [MapView, setMapView] = useState<MapComponent | null>(null);
   const [mapError, setMapError] = useState(false);
   const [selectedRound, setSelectedRound] = useState('all');
@@ -131,22 +135,31 @@ export function LottoExplorer() {
     }).catch(() => {
       if (active) setMapError(true);
     });
-    fetch('/data/lotto-map-data.json')
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30_000);
+    let active = true;
+    fetch('/data/lotto-map-data.json', { signal: controller.signal, cache: 'no-cache' })
       .then((response) => {
         if (!response.ok) throw new Error('full dataset not available');
-        return response.json() as Promise<LottoMapData>;
+        return response.json() as Promise<unknown>;
       })
       .then((dataset) => {
+        validateLottoMapData(dataset);
         if (active) {
           setData(dataset);
           setDataStatus('ready');
         }
       })
       .catch(() => {
-        if (active) setDataStatus('preview');
-      });
-    return () => { active = false; };
-  }, []);
+        if (active) setDataStatus('error');
+      })
+      .finally(() => clearTimeout(timeout));
+    return () => { active = false; clearTimeout(timeout); controller.abort(); };
+  }, [loadAttempt]);
 
   useEffect(() => {
     const context = (document as Document & { modelContext?: ModelContext }).modelContext;
@@ -288,7 +301,7 @@ export function LottoExplorer() {
           <span className="source-pulse" aria-hidden="true" />
           {dataStatus === 'ready'
             ? `${data.coverageStart}–${data.latestDraw}회 데이터`
-            : dataStatus === 'loading' ? '전체 데이터 불러오는 중' : `${data.latestDraw}회 미리보기`}
+            : dataStatus === 'loading' ? '전체 데이터 불러오는 중' : '전체 데이터 연결 실패'}
         </div>
         <a className="official-link" href="https://www.dhlottery.co.kr/wnprchsplcsrch/home" target="_blank" rel="noreferrer">
           동행복권 원문 <ExternalLink aria-hidden="true" />
@@ -300,8 +313,17 @@ export function LottoExplorer() {
           <div className="panel-intro">
             <p className="eyebrow"><MapPinned aria-hidden="true" /> LOTTO 6/45 MAP</p>
             <h1>당첨판매점을<br />지도에서 한눈에</h1>
-            <p>회차와 등수를 고르고 마커를 누르면 당첨번호와 1게임당 당첨금을 확인할 수 있습니다.</p>
+            <p>전체 회차의 당첨판매점을 한 번에 표시합니다. 마커를 누르면 판매점의 회차별 당첨 기록을 확인할 수 있습니다.</p>
           </div>
+
+          {dataStatus !== 'ready' && (
+            <div className="data-notice" role={dataStatus === 'error' ? 'alert' : 'status'}>
+              <strong>{dataStatus === 'loading' ? '전체 회차의 판매점을 불러오는 중입니다' : '전체 당첨판매점 데이터를 불러오지 못했습니다'}</strong>
+              {dataStatus === 'error' && (
+                <Button variant="outline" size="sm" onClick={() => { setDataStatus('loading'); setLoadAttempt((attempt) => attempt + 1); }}>데이터 다시 불러오기</Button>
+              )}
+            </div>
+          )}
 
           {activeDraw && (
             <section className="draw-card" aria-label={`${activeDraw.draw}회 당첨 정보`}>
@@ -327,19 +349,21 @@ export function LottoExplorer() {
           )}
 
           <section className="filter-section" aria-label="지도 필터">
-            <div className="filter-label-row"><label htmlFor="round-select">회차</label><span>{data.coverageStart}회부터</span></div>
+            <div className="filter-label-row"><label htmlFor="round-select">회차</label><span>{isFullData ? `${data.draws.length.toLocaleString('ko-KR')}개 회차` : '데이터 확인 중'}</span></div>
             <div className="round-control">
-              <Button variant="outline" size="icon-lg" aria-label="이전 회차" onClick={() => nudgeRound(-1)} disabled={selectedRound !== 'all' && Number(selectedRound) <= data.coverageStart}>
+              <Button variant="outline" size="icon-lg" aria-label="이전 회차" onClick={() => nudgeRound(-1)} disabled={!isFullData || (selectedRound !== 'all' && Number(selectedRound) <= data.coverageStart)}>
                 <ChevronLeft />
               </Button>
-              <NativeSelect id="round-select" className="round-select" value={selectedRound} onChange={(event) => setSelectedRound(event.target.value)}>
-                <NativeSelectOption value="all">전체 회차</NativeSelectOption>
+              <NativeSelect id="round-select" className="round-select" disabled={!isFullData} value={selectedRound} onChange={(event) => setSelectedRound(event.target.value)}>
+                <NativeSelectOption value="all">{isFullData ? `전체 회차 (${data.coverageStart}–${data.latestDraw}회)` : '전체 회차'}</NativeSelectOption>
                 {sortedDraws.map((draw) => <NativeSelectOption key={draw.draw} value={String(draw.draw)}>{draw.draw}회 · {draw.date.slice(0, 4)}</NativeSelectOption>)}
               </NativeSelect>
-              <Button variant="outline" size="icon-lg" aria-label="다음 회차" onClick={() => nudgeRound(1)} disabled={selectedRound === 'all' || Number(selectedRound) >= data.latestDraw}>
+              <Button variant="outline" size="icon-lg" aria-label="다음 회차" onClick={() => nudgeRound(1)} disabled={!isFullData || selectedRound === 'all' || Number(selectedRound) >= data.latestDraw}>
                 <ChevronRight />
               </Button>
             </div>
+
+            {isFullData && <p className="coverage-note">{selectedRound === 'all' ? `${data.coverageStart}–${data.latestDraw}회 누적 판매점을 표시 중입니다.` : `${selectedRound}회 판매점을 표시 중입니다.`}</p>}
 
             <div className="filter-label-row"><span id="rank-label">당첨 등수</span></div>
             <Tabs value={rankFilter} onValueChange={(value) => setRankFilter(value as RankFilter)} aria-labelledby="rank-label">
@@ -375,21 +399,21 @@ export function LottoExplorer() {
                   </button>
                 );
               })}
-              {visibleStores.length === 0 && <div className="empty-result">조건에 맞는 판매점이 없습니다.</div>}
+              {visibleStores.length === 0 && <div className="empty-result">{isFullData ? '조건에 맞는 판매점이 없습니다.' : dataStatus === 'loading' ? '판매점 기록을 불러오는 중입니다.' : '데이터를 다시 불러와 주세요.'}</div>}
               {visibleStores.length > 80 && <p className="list-limit">지도에는 전체를 표시하며 목록은 상위 80곳만 보여줍니다.</p>}
             </div>
           </section>
 
           <footer className="panel-footer">
             <Database aria-hidden="true" />
-            <p><strong>{data.source}</strong><span>판매점 기록은 공식 조회가 제공되는 {data.coverageStart}회부터입니다. 좌표는 공개 위치 기준이며 실제 출입구와 다를 수 있습니다.</span></p>
+            <p><strong>{data.source}</strong><span>판매점 기록은 공식 조회가 제공되는 {STORE_COVERAGE_START}회부터입니다. 인터넷 판매점과 좌표가 없는 기록은 지도에서 제외됩니다. 위치는 가장 최근 공개 주소 기준입니다.</span></p>
           </footer>
         </aside>
 
         <section className="map-stage" aria-label="로또 당첨판매점 지도">
           <div className="map-status-card">
-            <span><Sparkles aria-hidden="true" />{selectedRound === 'all' ? '역대 당첨 기록' : `${selectedRound}회 당첨 기록`}</span>
-            <strong>{visibleStores.length.toLocaleString('ko-KR')}</strong><small>개 판매점</small>
+            <span><Sparkles aria-hidden="true" />{isFullData ? selectedRound === 'all' ? `전체 ${data.draws.length}개 회차 누적` : `${selectedRound}회 당첨 기록` : dataStatus === 'error' ? '전체 데이터 연결 실패' : '전체 회차 데이터 확인 중'}</span>
+            <strong>{isFullData ? visibleStores.length.toLocaleString('ko-KR') : '—'}</strong><small>개 판매점</small>
           </div>
           <div className="map-legend" aria-label="마커 범례">
             <span><i className="legend-pin legend-first" />1등</span>

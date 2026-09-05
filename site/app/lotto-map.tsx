@@ -1,8 +1,8 @@
 'use client';
 
-import { memo, useCallback, useEffect, useMemo } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import L from 'leaflet';
-import { MapContainer, Marker, Popup, TileLayer, useMap } from 'react-leaflet';
+import { MapContainer, Marker, Popup, TileLayer, ZoomControl, useMap } from 'react-leaflet';
 import MarkerClusterGroup from 'react-leaflet-cluster';
 import type { LottoDraw, VisibleStore } from './lotto-types';
 
@@ -22,18 +22,21 @@ function ballTone(number: number) {
 }
 
 function StorePopup({ store, draws }: { store: VisibleStore; draws: Record<number, LottoDraw> }) {
+  const [historyLimit, setHistoryLimit] = useState(12);
   const history = [...store.visibleWins].sort((a, b) => b.draw - a.draw);
+  const drawCount = new Set(history.map((win) => win.draw)).size;
+  const ticketCount = history.reduce((sum, win) => sum + win.tickets, 0);
 
   return (
     <article className="popup-card">
       <div className="popup-eyebrow">
         <span>{store.region}</span>
-        <span>{history.length > 1 ? `${history.length}회 당첨` : `${history[0]?.rank ?? ''}등 당첨점`}</span>
+        <span>{drawCount}개 회차 · {ticketCount}건 당첨</span>
       </div>
       <h2>{store.name}</h2>
       <p className="popup-address">{store.address}</p>
       <div className="popup-history">
-        {history.slice(0, 12).map((win, index) => {
+        {history.slice(0, historyLimit).map((win, index) => {
           const draw = draws[win.draw];
           const prize = win.rank === 1 ? draw?.firstPrize : draw?.secondPrize;
           return (
@@ -60,7 +63,14 @@ function StorePopup({ store, draws }: { store: VisibleStore; draws: Record<numbe
           );
         })}
       </div>
-      {history.length > 12 && <p className="popup-more">최근 12건을 표시합니다 · 전체 {history.length}건</p>}
+      {history.length > historyLimit && (
+        <button className="popup-more" onClick={(event) => {
+          event.stopPropagation();
+          setHistoryLimit((limit) => limit + 12);
+        }}>
+          이전 당첨 기록 더 보기 ({historyLimit}/{history.length})
+        </button>
+      )}
     </article>
   );
 }
@@ -141,7 +151,7 @@ export function LottoMap({ stores, draws, selectedStoreId, onSelectStore }: Lott
       maxZoom={18}
       scrollWheelZoom
       className="lotto-map"
-      zoomControl
+      zoomControl={false}
       zoomAnimation={!prefersReducedMotion}
       fadeAnimation={!prefersReducedMotion}
       markerZoomAnimation={!prefersReducedMotion}
@@ -150,6 +160,7 @@ export function LottoMap({ stores, draws, selectedStoreId, onSelectStore }: Lott
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
+      <ZoomControl position="topright" />
       <MarkerClusterGroup
         chunkedLoading
         removeOutsideVisibleBounds

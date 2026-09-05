@@ -37,3 +37,4 @@ next-env.d.ts
 /outputs/
 /work/
 .lotto-build-checkpoint.ndjson
+.lotto-draws-checkpoint.json

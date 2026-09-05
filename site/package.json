@@ -7,8 +7,10 @@
   },
   "scripts": {
     "dev": "vinext dev",
-    "build": "vinext build",
+    "build": "pnpm data:validate && vinext build",
     "data:build": "node scripts/build-lotto-data.mjs",
+    "data:validate": "node scripts/validate-lotto-data.mjs",
+    "test": "node --test scripts/*.test.mjs",
     "start": "wrangler dev --config dist/server/wrangler.json",
     "lint": "oxlint",
     "format": "oxfmt"

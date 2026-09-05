@@ -1,9 +1,10 @@
 import { appendFileSync } from 'node:fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { STORE_COVERAGE_START, validateLottoMapData } from '../lib/lotto-data.mjs';
 
-const COVERAGE_START = 262;
+const COVERAGE_START = STORE_COVERAGE_START;
 const MAX_CONCURRENCY = 3;
 const DEFAULT_CONCURRENCY = 1;
 const DEFAULT_REQUEST_GAP_MS = 1_000;
@@ -23,6 +24,7 @@ const siteDirectory = resolve(scriptDirectory, '..');
 const outputPath = resolve(siteDirectory, 'public', 'data', 'lotto-map-data.json');
 const temporaryOutputPath = `${outputPath}.tmp`;
 const checkpointPath = resolve(siteDirectory, '.lotto-build-checkpoint.ndjson');
+const drawCheckpointPath = resolve(siteDirectory, '.lotto-draws-checkpoint.json');
 
 function readIntegerSetting(name, fallback, { min, max }) {
   const raw = process.env[name];
@@ -217,6 +219,23 @@ async function fetchDraws(latestDraw) {
   return [...rowsByDraw.values()].sort((a, b) => b.draw - a.draw);
 }
 
+async function loadOrFetchDraws(latestDraw) {
+  try {
+    const cached = JSON.parse(await readFile(drawCheckpointPath, 'utf8'));
+    if (cached.latestDraw === latestDraw && Array.isArray(cached.draws)
+      && cached.draws.length === latestDraw - COVERAGE_START + 1
+      && new Set(cached.draws.map((draw) => draw.draw)).size === cached.draws.length
+      && cached.draws.every((draw) => Number.isInteger(draw.draw) && draw.draw >= COVERAGE_START && draw.draw <= latestDraw)) {
+      return cached.draws;
+    }
+  } catch {
+    // A missing or interrupted checkpoint is regenerated from the official source.
+  }
+  const draws = await fetchDraws(latestDraw);
+  await writeFile(drawCheckpointPath, JSON.stringify({ latestDraw, draws }), 'utf8');
+  return draws;
+}
+
 async function loadCheckpoint(firstDraw, latestDraw) {
   const cached = new Map();
   let text;
@@ -232,7 +251,7 @@ async function loadCheckpoint(firstDraw, latestDraw) {
     try {
       const entry = JSON.parse(line);
       if (Number.isInteger(entry.draw) && entry.draw >= firstDraw && entry.draw <= latestDraw
-        && Array.isArray(entry.rows)) {
+        && Array.isArray(entry.rows) && entry.rows.length > 0) {
         cached.set(entry.draw, entry.rows);
       }
     } catch {
@@ -251,7 +270,7 @@ async function fetchStoreDraw(draw) {
   });
   const response = await fetchJson(`${STORE_URL}?${params}`, STORE_REFERER);
   const rows = response.data.list;
-  if (!Array.isArray(rows)) throw new Error(`Store result for draw ${draw} has no list`);
+  if (!Array.isArray(rows) || rows.length === 0) throw new Error(`Store result for draw ${draw} is empty`);
 
   const reportedTotal = Number(response.data.total);
   if (Number.isFinite(reportedTotal) && reportedTotal !== rows.length) {
@@ -286,7 +305,7 @@ function hasValidKoreanCoordinate(lat, lng) {
     && lng >= 124 && lng <= 132.5;
 }
 
-function buildStores(storeRowsByDraw) {
+export function buildStores(storeRowsByDraw) {
   const storesById = new Map();
   const exclusions = {
     onlineRows: 0,
@@ -365,7 +384,7 @@ function buildStores(storeRowsByDraw) {
   const stores = [...storesById.values()].map((store) => {
     const outputStore = {
       id: store.id,
-      name: store.name,
+      name: store.name || '이름 미제공 판매점',
       address: store.address,
       region: store.region,
       lat: store.lat,
@@ -418,7 +437,7 @@ async function main() {
   const latestDraw = await fetchLatestDraw();
   console.log(`Official draw range selected: ${COVERAGE_START}-${latestDraw}`);
 
-  const draws = await fetchDraws(latestDraw);
+  const draws = await loadOrFetchDraws(latestDraw);
   console.log(`Fetched ${draws.length} draw result records`);
 
   const storeRowsByDraw = await loadCheckpoint(COVERAGE_START, latestDraw);
@@ -456,12 +475,14 @@ async function main() {
     stores,
   };
   validateOutput(data);
+  validateLottoMapData(data);
 
   await mkdir(dirname(outputPath), { recursive: true });
   const serialized = JSON.stringify(data);
   await writeFile(temporaryOutputPath, serialized, 'utf8');
   await rename(temporaryOutputPath, outputPath);
   await rm(checkpointPath, { force: true });
+  await rm(drawCheckpointPath, { force: true });
 
   const winGroups = stores.reduce((sum, store) => sum + store.wins.length, 0);
   const ticketRows = stores.reduce(
@@ -480,8 +501,10 @@ async function main() {
   }, null, 2));
 }
 
-main().catch(async (error) => {
-  await rm(temporaryOutputPath, { force: true }).catch(() => undefined);
-  console.error(error);
-  process.exitCode = 1;
-});
+if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+  main().catch(async (error) => {
+    await rm(temporaryOutputPath, { force: true }).catch(() => undefined);
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
