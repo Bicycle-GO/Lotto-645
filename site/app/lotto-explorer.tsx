@@ -963,39 +963,26 @@ export function LottoExplorer() {
                   </output>
                 </div>
                 <div className="store-list">
-                  {listedStores.map((store) => {
-                    const hasFirst = store.visibleWins.some(
-                      (win) => win.rank === 1,
-                    );
-                    const hasSecond = store.visibleWins.some(
-                      (win) => win.rank === 2,
-                    );
-                    return (
-                      <button
-                        className={`store-item ${effectiveSelectedStoreId === store.id ? 'is-selected' : ''}`}
-                        aria-pressed={effectiveSelectedStoreId === store.id}
-                        key={store.id}
-                        onClick={() => selectStore(store.id)}
-                      >
-                        <span
-                          className={`store-rank-badge ${hasFirst && hasSecond ? 'rank-both' : hasFirst ? 'rank-first' : 'rank-second'}`}
-                        >
-                          {hasFirst && hasSecond ? '1+2' : hasFirst ? '1' : '2'}
-                        </span>
-                        <span className="store-copy">
-                          <strong>{store.name}</strong>
-                          <small>{store.address}</small>
-                        </span>
-                        <span className="store-count">
-                          {store.visibleWins.reduce(
-                            (sum, win) => sum + win.tickets,
-                            0,
-                          )}
-                          건
-                        </span>
-                      </button>
-                    );
-                  })}
+                  {listedStores.map((store) => (
+                    <button
+                      className={`store-item ${effectiveSelectedStoreId === store.id ? 'is-selected' : ''}`}
+                      aria-pressed={effectiveSelectedStoreId === store.id}
+                      key={store.id}
+                      onClick={() => selectStore(store.id)}
+                    >
+                      <span className="store-copy">
+                        <strong>{store.name}</strong>
+                        <small>{store.address}</small>
+                      </span>
+                      <span className="store-count">
+                        {store.visibleWins.reduce(
+                          (sum, win) => sum + win.tickets,
+                          0,
+                        )}
+                        건
+                      </span>
+                    </button>
+                  ))}
                   {visibleStores.length === 0 && (
                     <div className="empty-result">
                       {isFullData

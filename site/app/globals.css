@@ -157,7 +157,7 @@
 .results-heading output { color: #21383e; font-size: 13px; font-weight: 700; }
 .results-heading small { color: #889496; font-weight: 600; }
 .store-list { display: flex; flex-direction: column; gap: 4px; }
-.store-item { width: 100%; display: grid; grid-template-columns: 31px minmax(0,1fr) auto; align-items: center; gap: 10px; padding: 10px 9px; border: 1px solid transparent; border-radius: 11px; background: transparent; text-align: left; cursor: pointer; transition: background .18s, border-color .18s, transform .18s; content-visibility: auto; contain-intrinsic-size: 0 51px; }
+.store-item { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px 9px; border: 1px solid transparent; border-radius: 11px; background: transparent; text-align: left; cursor: pointer; transition: background .18s, border-color .18s, transform .18s; content-visibility: auto; contain-intrinsic-size: 0 51px; }
 .store-item:hover { background: #fff; border-color: #e0e5e1; transform: translateX(2px); }
 .store-item.is-selected { background: #fff; border-color: #8fb5b5; box-shadow: 0 4px 12px rgba(34,74,80,.07); }
 .store-rank-badge { width: 29px; height: 29px; display: grid; place-items: center; border-radius: 9px 9px 9px 3px; color: #fff; font-size: 10px; font-weight: 900; box-shadow: 0 4px 10px rgba(25,47,53,.12); }
