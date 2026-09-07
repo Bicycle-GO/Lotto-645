@@ -27,6 +27,8 @@ import {
   Search,
   Sparkles,
   Trophy,
+  LocateFixed,
+  LocateOff,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -44,6 +46,7 @@ import {
   matchesArea,
   matchesSearch,
   searchText,
+  distanceMeters,
   storeArea,
 } from '@/lib/lotto-search.mjs';
 import type {
@@ -53,6 +56,11 @@ import type {
   RankFilter,
   VisibleStore,
 } from './lotto-types';
+import { useIsMobile } from '@/hooks/use-mobile';
+
+type NearbyStore = VisibleStore & {
+  distanceFromUser: number | null;
+};
 
 type MapComponent = ComponentType<{
   stores: VisibleStore[];
@@ -85,6 +93,10 @@ type ToolState = {
   region: string;
   district: string;
   isFullData: boolean;
+  isNearbySearchEnabled: boolean;
+  nearbyRadiusMeters: number;
+  userLatitude: number | null;
+  userLongitude: number | null;
 };
 
 function compactMoney(amount: number) {
@@ -103,6 +115,12 @@ function ballTone(number: number) {
   return 'green';
 }
 
+function formatDistance(distance: number | null) {
+  if (distance === null || !Number.isFinite(distance)) return null;
+  if (distance < 1000) return `${Math.round(distance)}m`;
+  return `${(distance / 1000).toFixed(1)}km`;
+}
+
 function countFilteredStores(
   data: LottoMapData,
   selectedRound: string,
@@ -110,15 +128,31 @@ function countFilteredStores(
   query: string,
   region = 'all',
   district = 'all',
+  isNearbySearchEnabled = false,
+  userLatitude = null as number | null,
+  userLongitude = null as number | null,
+  nearbyRadiusMeters = null as number | null,
 ) {
   const normalizedQuery = query.trim().toLocaleLowerCase('ko-KR');
   let stores = 0;
   let tickets = 0;
+  const useNearbyFilter =
+    isNearbySearchEnabled &&
+    userLatitude !== null &&
+    userLongitude !== null &&
+    nearbyRadiusMeters !== null &&
+    Number.isFinite(nearbyRadiusMeters);
 
   data.stores.forEach((store) => {
     if (
       !matchesArea(store, region, district) ||
       !matchesSearch(searchText(store), normalizedQuery)
+    )
+      return;
+    if (
+      useNearbyFilter &&
+      distanceMeters(userLatitude, userLongitude, store.lat, store.lng) >
+        nearbyRadiusMeters
     )
       return;
     const matchingWins = store.wins.filter(
@@ -204,6 +238,13 @@ export function LottoExplorer() {
   const [focusRevision, setFocusRevision] = useState(0);
   const deferredQuery = useDeferredValue(query);
   const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null);
+  const [isNearbySearchEnabled, setIsNearbySearchEnabled] = useState(false);
+  const [nearbyRadiusMeters, setNearbyRadiusMeters] = useState(500);
+  const [userLatitude, setUserLatitude] = useState<number | null>(null);
+  const [userLongitude, setUserLongitude] = useState<number | null>(null);
+  const [locationError, setLocationError] = useState('');
+  const [isLocating, setIsLocating] = useState(false);
+  const isMobile = useIsMobile();
   const selectStore = useCallback((id: string | null) => {
     setSelectedStoreId(id);
     if (id) {
@@ -222,6 +263,10 @@ export function LottoExplorer() {
     region,
     district,
     isFullData,
+    isNearbySearchEnabled,
+    nearbyRadiusMeters,
+    userLatitude,
+    userLongitude,
   });
 
   useEffect(() => {
@@ -234,6 +279,10 @@ export function LottoExplorer() {
       region,
       district,
       isFullData,
+      isNearbySearchEnabled,
+      nearbyRadiusMeters,
+      userLatitude,
+      userLongitude,
     };
   }, [
     data,
@@ -244,6 +293,10 @@ export function LottoExplorer() {
     rankFilter,
     region,
     selectedRound,
+    isNearbySearchEnabled,
+    nearbyRadiusMeters,
+    userLatitude,
+    userLongitude,
   ]);
 
   useEffect(() => {
@@ -289,6 +342,50 @@ export function LottoExplorer() {
       controller.abort();
     };
   }, [loadAttempt]);
+
+  const useNearbyFilter =
+    isMobile &&
+    isNearbySearchEnabled &&
+    userLatitude !== null &&
+    userLongitude !== null;
+
+  const locationErrorMessage = (error: GeolocationPositionError) => {
+    if (error.code === error.PERMISSION_DENIED)
+      return '위치 권한이 거부되었습니다. 브라우저 설정에서 위치 권한을 허용해 주세요.';
+    if (error.code === error.POSITION_UNAVAILABLE)
+      return '현재 위치를 확인할 수 없습니다.';
+    if (error.code === error.TIMEOUT)
+      return '위치 확인 시간이 초과되었습니다.';
+    return '현재 위치를 가져오지 못했습니다.';
+  };
+
+  const requestMyLocation = () => {
+    if (!('geolocation' in navigator)) {
+      setLocationError('이 브라우저는 위치 정보를 지원하지 않습니다.');
+      setIsNearbySearchEnabled(false);
+      return;
+    }
+    setIsLocating(true);
+    setLocationError('');
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setIsNearbySearchEnabled(true);
+        setUserLatitude(position.coords.latitude);
+        setUserLongitude(position.coords.longitude);
+        setIsLocating(false);
+      },
+      (error) => {
+        setIsLocating(false);
+        setIsNearbySearchEnabled(false);
+        setLocationError(locationErrorMessage(error));
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 12_000,
+        maximumAge: 2_000,
+      },
+    );
+  };
 
   useEffect(() => {
     const context = (document as Document & { modelContext?: ModelContext })
@@ -362,6 +459,11 @@ export function LottoExplorer() {
               query: nextQuery,
               region: current.region,
               district: current.district,
+              nearbySearchEnabled:
+                current.isNearbySearchEnabled &&
+                current.userLatitude !== null &&
+                current.userLongitude !== null,
+              nearbyRadiusMeters: current.nearbyRadiusMeters,
               ...countFilteredStores(
                 current.data,
                 nextRound,
@@ -369,6 +471,12 @@ export function LottoExplorer() {
                 nextQuery,
                 current.region,
                 current.district,
+                current.isNearbySearchEnabled &&
+                  current.userLatitude !== null &&
+                  current.userLongitude !== null,
+                current.userLatitude,
+                current.userLongitude,
+                current.nearbyRadiusMeters,
               ),
             };
           },
@@ -405,6 +513,11 @@ export function LottoExplorer() {
               fullDatasetLoaded: current.isFullData,
               region: current.region,
               district: current.district,
+              nearbySearchEnabled:
+                current.isNearbySearchEnabled &&
+                current.userLatitude !== null &&
+                current.userLongitude !== null,
+              nearbyRadiusMeters: current.nearbyRadiusMeters,
               ...countFilteredStores(
                 current.data,
                 current.selectedRound,
@@ -412,6 +525,12 @@ export function LottoExplorer() {
                 current.query,
                 current.region,
                 current.district,
+                current.isNearbySearchEnabled &&
+                  current.userLatitude !== null &&
+                  current.userLongitude !== null,
+                current.userLatitude,
+                current.userLongitude,
+                current.nearbyRadiusMeters,
               ),
             };
           },
@@ -435,20 +554,43 @@ export function LottoExplorer() {
   );
 
   const normalizedQuery = deferredQuery.trim().toLocaleLowerCase('ko-KR');
-  const visibleStores = useMemo<VisibleStore[]>(() => {
-    const result: VisibleStore[] = [];
+  const hasUserLocation = userLatitude !== null && userLongitude !== null;
+  const nearbyRadiusClamped = Math.min(Math.max(nearbyRadiusMeters, 100), 1000);
+  const visibleStores = useMemo<NearbyStore[]>(() => {
+    const result: NearbyStore[] = [];
+    const filteredRadiusMeters = isNearbySearchEnabled ? nearbyRadiusClamped : 0;
     for (const store of data.stores) {
       if (
         !matchesArea(store, region, district) ||
         !matchesSearch(storeSearchIndex.get(store.id) || '', normalizedQuery)
       )
         continue;
+      if (
+        useNearbyFilter &&
+        distanceMeters(userLatitude, userLongitude, store.lat, store.lng) >
+          filteredRadiusMeters
+      ) {
+        continue;
+      }
       const visibleWins = store.wins.filter(
         (win) =>
           (selectedRound === 'all' || win.draw === Number(selectedRound)) &&
           (rankFilter === 'all' || win.rank === Number(rankFilter)),
       );
-      if (visibleWins.length) result.push({ ...store, visibleWins });
+      if (!visibleWins.length) continue;
+      const distanceFromUser =
+        useNearbyFilter || hasUserLocation
+          ? distanceMeters(userLatitude, userLongitude, store.lat, store.lng)
+          : null;
+
+      result.push({
+        ...store,
+        visibleWins,
+        distanceFromUser:
+          (useNearbyFilter || hasUserLocation) && Number.isFinite(distanceFromUser)
+            ? distanceFromUser
+            : null,
+      });
     }
     return result;
   }, [
@@ -459,6 +601,12 @@ export function LottoExplorer() {
     region,
     selectedRound,
     storeSearchIndex,
+    isNearbySearchEnabled,
+    nearbyRadiusClamped,
+    useNearbyFilter,
+    hasUserLocation,
+    userLatitude,
+    userLongitude,
   ]);
 
   const districts = useMemo(
@@ -487,6 +635,8 @@ export function LottoExplorer() {
       ]),
       points: (visibleStores.length
         ? visibleStores
+        : useNearbyFilter && hasUserLocation
+          ? [[userLatitude, userLongitude]]
         : data.stores.filter(
             (store) =>
               matchesArea(store, region, district) &&
@@ -516,6 +666,8 @@ export function LottoExplorer() {
     setQuery('');
     setSelectedRound('all');
     setRankFilter('all');
+    setIsNearbySearchEnabled(false);
+    setLocationError('');
     setSelectedStoreId(null);
     setFocusRevision((value) => value + 1);
   };
@@ -523,13 +675,21 @@ export function LottoExplorer() {
   const listedStores = useMemo(
     () =>
       [...visibleStores]
-        .sort(
-          (a, b) =>
+        .sort((a, b) => {
+          if (useNearbyFilter) {
+            const aDistance = a.distanceFromUser;
+            const bDistance = b.distanceFromUser;
+            if (aDistance !== null && bDistance !== null) return aDistance - bDistance;
+            if (aDistance !== null) return -1;
+            if (bDistance !== null) return 1;
+          }
+          return (
             b.visibleWins.reduce((sum, win) => sum + win.tickets, 0) -
-            a.visibleWins.reduce((sum, win) => sum + win.tickets, 0),
-        )
+            a.visibleWins.reduce((sum, win) => sum + win.tickets, 0)
+          );
+        })
         .slice(0, 80),
-    [visibleStores],
+    [useNearbyFilter, visibleStores],
   );
 
   const effectiveSelectedStoreId =
@@ -782,6 +942,69 @@ export function LottoExplorer() {
                   <RotateCcw />
                 </button>
               </div>
+              {isMobile && (
+                <div className="location-filter">
+                  <div className="location-filter-header">
+                    <span className="location-filter-label">
+                      <LocateFixed aria-hidden="true" />
+                      <strong>내 위치 기준</strong>
+                    </span>
+                    <div className="location-filter-actions">
+                      {hasUserLocation && useNearbyFilter && (
+                        <button
+                          type="button"
+                          className="location-clear"
+                          onClick={() => {
+                            setIsNearbySearchEnabled(false);
+                            setLocationError('');
+                          }}
+                        >
+                          <LocateOff aria-hidden="true" />
+                          해제
+                        </button>
+                      )}
+                      <Button
+                        size="sm"
+                        onClick={requestMyLocation}
+                        disabled={isLocating}
+                      >
+                        {isLocating
+                          ? '위치 확인 중...'
+                          : hasUserLocation
+                            ? '위치 새로고침'
+                            : '내 위치 찾기'}
+                      </Button>
+                    </div>
+                  </div>
+                  {locationError && <p className="location-error">{locationError}</p>}
+                  <label className="location-slider-label" htmlFor="location-radius">
+                    반경 {nearbyRadiusClamped}m
+                    {useNearbyFilter ? ' (현재 적용됨)' : ''}
+                  </label>
+                  <input
+                    id="location-radius"
+                    type="range"
+                    min={100}
+                    max={1000}
+                    step={100}
+                    value={nearbyRadiusClamped}
+                    onChange={(event) => {
+                      setNearbyRadiusMeters(Number(event.target.value));
+                      if (!useNearbyFilter && hasUserLocation) {
+                        setIsNearbySearchEnabled(true);
+                      }
+                    }}
+                    className="location-slider"
+                    disabled={!hasUserLocation || isLocating}
+                    aria-label="반경 설정"
+                  />
+                  <small className="location-slider-hint">
+                    {useNearbyFilter
+                      ? `현재 반경 내 ${visibleStores.length.toLocaleString('ko-KR')}곳`
+                      : '위치를 먼저 받아오면 반경 검색이 활성화됩니다'}
+                  </small>
+                </div>
+              )}
               <div className="advanced-filters" id="advanced-filters">
                 <div className="filter-label-row">
                   <label htmlFor="round-select">회차</label>
@@ -972,7 +1195,12 @@ export function LottoExplorer() {
                     >
                       <span className="store-copy">
                         <strong>{store.name}</strong>
-                        <small>{store.address}</small>
+                        <small>
+                          {store.address}
+                          {store.distanceFromUser !== null
+                            ? ` · ${formatDistance(store.distanceFromUser)}`
+                            : ''}
+                        </small>
                       </span>
                       <span className="store-count">
                         {store.visibleWins.reduce(
@@ -983,15 +1211,17 @@ export function LottoExplorer() {
                       </span>
                     </button>
                   ))}
-                  {visibleStores.length === 0 && (
-                    <div className="empty-result">
-                      {isFullData
-                        ? '조건에 맞는 판매점이 없습니다. 지역이나 검색 조건을 변경해 주세요.'
+                {visibleStores.length === 0 && (
+                  <div className="empty-result">
+                    {isFullData
+                        ? useNearbyFilter
+                          ? '반경 내 판매점이 없습니다. 반경을 늘리거나 위치를 다시 잡아주세요.'
+                          : '조건에 맞는 판매점이 없습니다. 지역이나 검색 조건을 변경해 주세요.'
                         : dataStatus === 'loading'
                           ? '판매점 기록을 불러오는 중입니다.'
                           : '데이터를 다시 불러와 주세요.'}
-                    </div>
-                  )}
+                  </div>
+                )}
                   {visibleStores.length > 80 && (
                     <p className="list-limit">
                       지도에는 전체를 표시하며 목록은 상위 80곳만 보여줍니다.
@@ -1030,7 +1260,11 @@ export function LottoExplorer() {
             <strong>
               {isFullData ? visibleStores.length.toLocaleString('ko-KR') : '—'}
             </strong>
-            <small>개 판매점</small>
+            <small>
+                {useNearbyFilter
+                      ? `반경 ${nearbyRadiusClamped}m 내`
+                : '개 판매점'}
+            </small>
           </div>
           <div className="map-legend" aria-label="마커 범례">
             <span>
