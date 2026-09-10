@@ -320,6 +320,7 @@ export function LottoMap({
     <>
       <fieldset className="map-style-control" aria-label="지도 종류">
         <button
+          aria-label="일반 지도"
           aria-pressed={mapStyle === 'street'}
           onClick={() => {
             setMapStyle('street');
@@ -327,9 +328,9 @@ export function LottoMap({
           }}
         >
           <Map />
-          <span>일반지도</span>
         </button>
         <button
+          aria-label="항공사진 지도"
           aria-pressed={mapStyle === 'satellite'}
           onClick={() => {
             setMapStyle('satellite');
@@ -337,7 +338,6 @@ export function LottoMap({
           }}
         >
           <Satellite />
-          <span>항공사진</span>
         </button>
       </fieldset>
       {tileError && (

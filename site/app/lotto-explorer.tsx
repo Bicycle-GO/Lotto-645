@@ -712,6 +712,28 @@ export function LottoExplorer() {
     () => [...data.draws].sort((a, b) => b.draw - a.draw),
     [data.draws],
   );
+  const topWinningNumbers = useMemo(
+    () => {
+      if (!isFullData) return [];
+      const frequency = new Map<number, number>();
+      for (let number = 1; number <= 45; number += 1) {
+        frequency.set(number, 0);
+      }
+      data.draws.forEach((draw) => {
+        draw.numbers.forEach((number) => {
+          frequency.set(number, (frequency.get(number) || 0) + 1);
+        });
+      });
+      return [...frequency.entries()]
+        .sort((a, b) => {
+          const countDiff = b[1] - a[1];
+          return countDiff !== 0 ? countDiff : a[0] - b[0];
+        })
+        .slice(0, 10)
+        .map(([number, count]) => ({ number, count }));
+    },
+    [data.draws, isFullData],
+  );
 
   const nudgeRound = (delta: number) => {
     const current =
@@ -1098,6 +1120,31 @@ export function LottoExplorer() {
                     </TabsTrigger>
                   </TabsList>
                 </Tabs>
+                <div className="top-number-rank">
+                  <div className="filter-label-row">
+                    <span>가장 많이 당첨된 번호</span>
+                    <small>1~10위</small>
+                  </div>
+                  {isFullData ? (
+                    <ol className="number-rank-list">
+                      {topWinningNumbers.map((entry, index) => (
+                        <li key={entry.number} className="number-rank-item">
+                          <strong>{index + 1}위</strong>
+                          <span
+                            className={`lotto-ball ball-${ballTone(entry.number)}`}
+                          >
+                            {entry.number}
+                          </span>
+                          <span>{entry.count.toLocaleString('ko-KR')}회</span>
+                        </li>
+                      ))}
+                    </ol>
+                  ) : (
+                    <p className="number-rank-empty">
+                      당첨번호 데이터 로딩 중입니다
+                    </p>
+                  )}
+                </div>
               </div>
             </section>
           </div>
