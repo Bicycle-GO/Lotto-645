@@ -180,11 +180,11 @@ async function fetchLatestDraw() {
   return requestedLatest;
 }
 
-async function fetchDraws(latestDraw) {
+async function fetchDraws(latestDraw, firstDraw = COVERAGE_START) {
   const rowsByDraw = new Map();
   let cursor;
 
-  while (rowsByDraw.size < latestDraw - COVERAGE_START + 1) {
+  while (rowsByDraw.size < latestDraw - firstDraw + 1) {
     const params = cursor === undefined
       ? new URLSearchParams({ srchDir: 'center', srchLtEpsd: String(latestDraw) })
       : new URLSearchParams({ srchDir: 'older', srchCursorLtEpsd: String(cursor) });
@@ -196,20 +196,20 @@ async function fetchDraws(latestDraw) {
 
     const pageDraws = rows.map(toDraw);
     for (const draw of pageDraws) {
-      if (draw.draw >= COVERAGE_START && draw.draw <= latestDraw) rowsByDraw.set(draw.draw, draw);
+      if (draw.draw >= firstDraw && draw.draw <= latestDraw) rowsByDraw.set(draw.draw, draw);
     }
 
     const nextCursor = Math.min(...pageDraws.map((draw) => draw.draw));
-    if (nextCursor <= COVERAGE_START) break;
+    if (nextCursor <= firstDraw) break;
     if (cursor !== undefined && nextCursor >= cursor) {
       throw new Error(`Draw pagination did not advance: ${cursor} -> ${nextCursor}`);
     }
     cursor = nextCursor;
   }
 
-  const expectedCount = latestDraw - COVERAGE_START + 1;
+  const expectedCount = latestDraw - firstDraw + 1;
   const missing = [];
-  for (let draw = COVERAGE_START; draw <= latestDraw; draw += 1) {
+  for (let draw = firstDraw; draw <= latestDraw; draw += 1) {
     if (!rowsByDraw.has(draw)) missing.push(draw);
   }
   if (missing.length > 0 || rowsByDraw.size !== expectedCount) {
@@ -400,6 +400,39 @@ export function buildStores(storeRowsByDraw) {
   return { stores, inputRows, exclusions };
 }
 
+export function extendArchive(previous, newDraws, newStoreRows, generatedAt = new Date().toISOString()) {
+  validateLottoMapData(previous);
+  if (!newDraws.length || newDraws.some((draw) => draw.draw <= previous.latestDraw)) {
+    throw new Error('An archive update must contain only new draws.');
+  }
+  const drawIds = new Set(newDraws.map((draw) => draw.draw));
+  if (newStoreRows.size !== drawIds.size || [...newStoreRows.keys()].some((draw) => !drawIds.has(draw))) {
+    throw new Error('New draw results and store records must cover the same draws.');
+  }
+  const { stores: newStores } = buildStores(newStoreRows);
+  const storesById = new Map(previous.stores.map((store) => [store.id, store]));
+  for (const store of newStores) {
+    const old = storesById.get(store.id);
+    storesById.set(store.id, old ? {
+      ...old,
+      ...store,
+      name: store.name === '이름 미제공 판매점' ? old.name : store.name,
+      address: store.address || old.address,
+      region: store.region || old.region,
+      wins: [...store.wins, ...old.wins],
+    } : store);
+  }
+  const data = {
+    ...previous,
+    generatedAt,
+    latestDraw: Math.max(...drawIds),
+    draws: [...newDraws, ...previous.draws].sort((a, b) => b.draw - a.draw),
+    stores: [...storesById.values()].sort((a, b) => a.id.localeCompare(b.id)),
+  };
+  validateLottoMapData(data);
+  return data;
+}
+
 function validateOutput(data) {
   const expectedDrawCount = data.latestDraw - data.coverageStart + 1;
   if (data.draws.length !== expectedDrawCount) {
@@ -434,16 +467,26 @@ function validateOutput(data) {
 
 async function main() {
   console.log(`Building lotto map snapshot with concurrency=${concurrency}, requestGapMs=${requestGapMs}`);
+  const previous = process.argv.includes('--update')
+    ? JSON.parse(await readFile(outputPath, 'utf8'))
+    : null;
+  if (previous) validateLottoMapData(previous);
   const latestDraw = await fetchLatestDraw();
   console.log(`Official draw range selected: ${COVERAGE_START}-${latestDraw}`);
+  if (previous && latestDraw <= previous.latestDraw) {
+    if (latestDraw < previous.latestDraw) throw new Error('Refusing to roll back the existing archive.');
+    console.log(`Archive is already current through draw ${latestDraw}; no files changed.`);
+    return;
+  }
+  const firstDraw = previous ? previous.latestDraw + 1 : COVERAGE_START;
 
-  const draws = await loadOrFetchDraws(latestDraw);
+  const draws = previous ? await fetchDraws(latestDraw, firstDraw) : await loadOrFetchDraws(latestDraw);
   console.log(`Fetched ${draws.length} draw result records`);
 
-  const storeRowsByDraw = await loadCheckpoint(COVERAGE_START, latestDraw);
+  const storeRowsByDraw = await loadCheckpoint(firstDraw, latestDraw);
   const allDrawIds = Array.from(
-    { length: latestDraw - COVERAGE_START + 1 },
-    (_, index) => COVERAGE_START + index,
+    { length: latestDraw - firstDraw + 1 },
+    (_, index) => firstDraw + index,
   );
   const missingDrawIds = allDrawIds.filter((draw) => !storeRowsByDraw.has(draw));
   if (storeRowsByDraw.size > 0) {
@@ -466,7 +509,7 @@ async function main() {
   }
 
   const { stores, inputRows, exclusions } = buildStores(storeRowsByDraw);
-  const data = {
+  const data = previous ? extendArchive(previous, draws, storeRowsByDraw) : {
     generatedAt: new Date().toISOString(),
     coverageStart: COVERAGE_START,
     latestDraw,
@@ -484,17 +527,18 @@ async function main() {
   await rm(checkpointPath, { force: true });
   await rm(drawCheckpointPath, { force: true });
 
-  const winGroups = stores.reduce((sum, store) => sum + store.wins.length, 0);
-  const ticketRows = stores.reduce(
+  const winGroups = data.stores.reduce((sum, store) => sum + store.wins.length, 0);
+  const ticketRows = data.stores.reduce(
     (sum, store) => sum + store.wins.reduce((storeSum, win) => storeSum + win.tickets, 0),
     0,
   );
   console.log(JSON.stringify({
     outputPath,
     bytes: Buffer.byteLength(serialized),
-    draws: draws.length,
+    draws: data.draws.length,
+    fetchedDraws: draws.length,
     inputStoreRows: inputRows,
-    stores: stores.length,
+    stores: data.stores.length,
     winGroups,
     retainedTicketRows: ticketRows,
     exclusions,

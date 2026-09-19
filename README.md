@@ -19,7 +19,14 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-지도는 `site/public/data/lotto-map-data.json`의 전체 회차 데이터를 사용합니다. 파일이 없거나 최신 공식 회차까지 갱신하려면 다음을 실행하고, 생성한 JSON 파일도 배포에 함께 포함해야 합니다.
+지도는 `site/public/data/lotto-map-data.json`의 전체 회차 데이터를 사용합니다. 기존 기록을 유지하고 새 회차만 추가하려면 `pnpm data:update`를 실행합니다. 공식 최신 회차의 당첨번호와 1·2등 판매점을 수집해 병합하며, 이미 최신이면 파일을 변경하지 않습니다. 생성한 JSON 파일도 Git에 반영해야 Vercel 배포에 포함됩니다.
+
+```powershell
+pnpm data:update
+pnpm data:validate
+```
+
+파일이 없거나 전체 기록을 다시 수집하려면 다음을 실행합니다.
 
 ```powershell
 pnpm data:build

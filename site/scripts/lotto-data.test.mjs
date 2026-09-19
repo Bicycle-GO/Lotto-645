@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { validateLottoMapData } from '../lib/lotto-data.mjs';
-import { buildStores } from './build-lotto-data.mjs';
+import { buildStores, extendArchive } from './build-lotto-data.mjs';
 
 function archive() {
   return {
@@ -95,4 +95,38 @@ test('excludes internet sellers and unusable coordinates from map markers', () =
   assert.equal(result.stores.length, 1);
   assert.equal(result.exclusions.onlineRows, 1);
   assert.equal(result.exclusions.invalidCoordinateRows, 1);
+});
+
+test('appends new draws without losing old tickets or stores, using latest shop locations', () => {
+  const previous = archive();
+  previous.stores[0].phone = '02-123-4567';
+  const original = structuredClone(previous);
+  const draw = { ...previous.draws[0], draw: 265 };
+  const row = { ltShpId: 'test-store', shpNm: '', shpAddr: '서울 새 주소', region: '서울', shpLat: 37.6, shpLot: 127.1, wnShpRnk: 1, atmtPsvYnTxt: '자동' };
+  const updated = extendArchive(previous, [draw], new Map([[265, [row, row,
+    { ...row, ltShpId: 'new-store', shpNm: '신규 판매점', wnShpRnk: 2 },
+    { ...row, ltShpId: 'online', shpNm: '인터넷 복권판매사이트' },
+  ]]]));
+  const shop = updated.stores.find((store) => store.id === 'test-store');
+  assert.deepEqual(previous, original);
+  assert.equal(updated.latestDraw, 265);
+  assert.deepEqual(updated.draws.slice(1), original.draws);
+  assert.deepEqual(shop.wins.slice(1), original.stores[0].wins);
+  assert.equal(shop.wins[0].tickets, 2);
+  assert.equal(shop.name, '테스트 판매점');
+  assert.equal(shop.phone, '02-123-4567');
+  assert.equal(shop.address, '서울 새 주소');
+  assert.equal(shop.lat, 37.6);
+  assert.equal(updated.stores.length, 2);
+});
+
+test('refuses gaps, repeated draws and missing mapped stores during an update', () => {
+  const previous = archive();
+  const draw = { ...previous.draws[0], draw: 265 };
+  const row = { ltShpId: 'new', shpNm: '판매점', shpAddr: '서울 주소', region: '서울', shpLat: 37.5, shpLot: 127, wnShpRnk: 1 };
+  assert.throws(() => extendArchive(previous, [previous.draws[0]], new Map()), /only new draws/);
+  assert.throws(() => extendArchive(previous, [draw, draw], new Map([[265, [row]]])), /incomplete draw results/);
+  assert.throws(() => extendArchive(previous, [{ ...draw, draw: 266 }], new Map([[266, [row]]])), /incomplete draw results/);
+  assert.throws(() => extendArchive(previous, [draw], new Map()), /same draws/);
+  assert.throws(() => extendArchive(previous, [draw], new Map([[265, []]])), /missing store history/);
 });
