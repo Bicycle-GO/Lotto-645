@@ -633,19 +633,20 @@ export function LottoExplorer() {
         rankFilter,
         focusRevision,
       ]),
-      points: (visibleStores.length
-        ? visibleStores
+      points: visibleStores.length
+        ? visibleStores.map((store) => [store.lat, store.lng])
         : useNearbyFilter && hasUserLocation
           ? [[userLatitude, userLongitude]]
-        : data.stores.filter(
-            (store) =>
-              matchesArea(store, region, district) &&
-              matchesSearch(
-                storeSearchIndex.get(store.id) || '',
-                normalizedQuery,
-              ),
-          )
-      ).map((store) => [store.lat, store.lng]),
+          : data.stores
+              .filter(
+                (store) =>
+                  matchesArea(store, region, district) &&
+                  matchesSearch(
+                    storeSearchIndex.get(store.id) || '',
+                    normalizedQuery,
+                  ),
+              )
+              .map((store) => [store.lat, store.lng]),
     }),
     [
       data.stores,
